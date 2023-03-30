@@ -1,11 +1,11 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g
+from flask import Flask, render_template, request, flash, redirect, session, g, abort
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
-from models import db, connect_db, User, Message
+from models import db, connect_db, User, Message, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -153,7 +153,8 @@ def users_show(user_id):
                 .order_by(Message.timestamp.desc())
                 .limit(100)
                 .all())
-    return render_template('users/show.html', user=user, messages=messages)
+    likes = [message.id for message in user.likes]
+    return render_template('users/show.html', user=user, messages=messages, likes=likes)
 
 
 @app.route('/users/<int:user_id>/following')
@@ -209,6 +210,47 @@ def stop_following(follow_id):
 
     return redirect(f"/users/{g.user.id}/following")
 
+@app.route('/users/add_like/<int:message_id>', methods=["POST"])
+def add_like(message_id):
+    """Add a 'like' to a particular messagfe."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    liked_messages = [message.id for message in g.user.likes]
+    if message_id in liked_messages:
+        message = Likes.query.filter_by(message_id=message_id).first()
+        db.session.delete(message)
+        db.session.commit()
+
+        flash("Removed message from liked list.", "danger")
+        return redirect("/")
+
+    user_messages = [message.id for message in g.user.messages]
+    if message_id in user_messages:
+        flash("You can't like your own message!", "danger")
+        return redirect("/")
+
+    new_like = Likes(user_id=g.user.id, message_id=message_id)
+    db.session.add(new_like)
+    db.session.commit()
+    return redirect("/")
+
+
+@app.route('/users/likes')
+def show_likes():
+    """Show liked messages."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    liked_messages = g.user.likes
+    user = g.user
+    liked_messages_ids = [message.id for message in g.user.likes]
+
+    return render_template('users/likes.html', messages=liked_messages, user=user, liked_messages_ids=liked_messages_ids)
 
 @app.route('/users/profile', methods=["GET", "POST"])
 def profile():
@@ -320,8 +362,10 @@ def homepage():
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
+        
+        liked_msg_ids = [msg.id for msg in g.user.likes]
 
-        return render_template('home.html', messages=messages)
+        return render_template('home.html', messages=messages, likes=liked_msg_ids)
 
     else:
         return render_template('home-anon.html')
